@@ -4,6 +4,9 @@
 #include "runtime/function/render/window_system.h"
 #include "runtime/core/base/macro.h"
 
+#define GLFW_EXPOSE_NATIVE_WIN32 1 //暴露出win32相关的原生接口
+#include "GLFW/glfw3native.h"
+
 #include <algorithm>
 #include <cmath>
 
@@ -107,7 +110,8 @@ namespace Piccolo
 
     void DirectX12RHI::initialize(RHIInitInfo init_info)
     {
-        //m_window = init_info.window_system->getWindow();
+        m_window = init_info.window_system->getWindow();
+        mHWnd = glfwGetWin32Window(m_window);
 
         std::array<int, 2> window_size = init_info.window_system->getWindowSize();
 

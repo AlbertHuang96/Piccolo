@@ -193,8 +193,8 @@ namespace Piccolo
 
         QueueFamilyIndices m_queue_indices;
 
-        //GLFWwindow*        m_window {nullptr};
-        HWND mHWnd = nullptr;
+        GLFWwindow*        m_window {nullptr};
+        HWND mHWnd         = nullptr;
 
         //VkInstance         m_instance {nullptr};
         //VkSurfaceKHR       m_surface {nullptr};
