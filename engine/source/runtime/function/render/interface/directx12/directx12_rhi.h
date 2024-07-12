@@ -31,6 +31,8 @@ namespace Piccolo
         RHISampler* getOrCreateDefaultSampler(RHIDefaultSamplerType type) override;
         RHISampler* getOrCreateMipmapSampler(uint32_t width, uint32_t height) override;
         RHIShader* createShaderModule(const std::vector<unsigned char>& shader_code) override;
+        //
+        // buffer = ComPtr<ID3D12Resource>
         void createBuffer(RHIDeviceSize size, RHIBufferUsageFlags usage, RHIMemoryPropertyFlags properties, RHIBuffer* &buffer, RHIDeviceMemory* &buffer_memory) override;
         void createBufferAndInitialize(RHIBufferUsageFlags usage, RHIMemoryPropertyFlags properties, RHIBuffer*& buffer, RHIDeviceMemory*& buffer_memory, RHIDeviceSize size, void* data = nullptr, int datasize = 0) override;
         bool createBufferVMA(VmaAllocator allocator,
@@ -168,15 +170,17 @@ namespace Piccolo
     public:
         static uint8_t const k_max_frames_in_flight {3};
 
+        ComPtr<ID3D12CommandQueue> mGraphicsCmdQueue;
+        ComPtr<ID3D12CommandQueue> mComputeCmdQueue;
         
-        RHIQueue* m_graphics_queue{ nullptr };
-        RHIQueue* m_compute_queue{ nullptr };
+        RHIQueue* mGraphicsQueue{ nullptr };
+        RHIQueue* mComputeQueue{ nullptr };
 
         RHIFormat m_swapchain_image_format{ RHI_FORMAT_UNDEFINED };
         std::vector<RHIImageView*> m_swapchain_imageviews;
         RHIExtent2D m_swapchain_extent;
-        RHIViewport m_viewport;
-        RHIRect2D m_scissor;
+        RHIViewport mViewport;
+        RHIRect2D mScissor;
 
         RHIFormat m_depth_image_format{ RHI_FORMAT_UNDEFINED };
         //RHIImageView* m_depth_image_view = new VulkanImageView();

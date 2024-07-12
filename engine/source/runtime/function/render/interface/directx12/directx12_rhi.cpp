@@ -196,6 +196,22 @@ namespace Piccolo
             D3D12CreateDevice(adapter, D3D_FEATURE_LEVEL_12_1, IID_PPV_ARGS(device.GetAddressOf()));
         }
 
+        D3D12_COMMAND_QUEUE_DESC commandQueueDesc = {};
+        commandQueueDesc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
+        commandQueueDesc.Flags = D3D12_COMMAND_QUEUE_FLAG_NONE;
+        
+        ThrowIfFailed(device->CreateCommandQueue(&commandQueueDesc, IID_PPV_ARGS(&mGraphicsCmdQueue)));
+        mGraphicsQueue = new DX3D12CommandQueue();
+        ((DX3D12CommandQueue*)mGraphicsQueue)->setResource(mGraphicsCmdQueue.Get());
+
+        D3D12_COMMAND_QUEUE_DESC commandQueueDesc2 = {};
+        commandQueueDesc2.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
+        commandQueueDesc2.Flags = D3D12_COMMAND_QUEUE_FLAG_NONE;
+
+        ThrowIfFailed(device->CreateCommandQueue(&commandQueueDesc2, IID_PPV_ARGS(&mComputeCmdQueue)));
+        mComputeCmdQueue = new DX3D12CommandQueue();
+        ((DX3D12CommandQueue*)mComputeQueue)->setResource(mComputeCmdQueue.Get());
+
     }
 
     void DirectX12RHI::createWindowSurface()
@@ -242,9 +258,15 @@ namespace Piccolo
         m_current_frame_index = m_swapchain->GetCurrentBackBufferIndex();
     }
 
+    // cmd buffer = dx12 cmd list
     RHICommandBuffer* DirectX12RHI::getCurrentCommandBuffer() const 
     { 
         return m_current_command_buffer; 
+    }
+
+    RHICommandBuffer* const* DirectX12RHI::getCommandBufferList() const
+    {
+        return m_command_buffers;
     }
 
     RHICommandPool* DirectX12RHI::getCommandPoor() const 
@@ -265,11 +287,11 @@ namespace Piccolo
     }
     RHIQueue* DirectX12RHI::getGraphicsQueue() const 
     { 
-        return m_graphics_queue; 
+        return mGraphicsQueue;
     }
     RHIQueue* DirectX12RHI::getComputeQueue() const 
     { 
-        return m_compute_queue; 
+        return mComputeQueue;
     }
 
     void DirectX12RHI::createFramebufferImageAndView()
@@ -287,6 +309,43 @@ namespace Piccolo
             device->CreateRenderTargetView(renderTargets[n].Get(), nullptr, rtvHandle);
             rtvHandle.Offset(1, rtvDescriptorSize);
         }
+    }
+
+    void DirectX12RHI::cmdSetViewportPFN(RHICommandBuffer* commandBuffer, uint32_t firstViewport, uint32_t viewportCount, const RHIViewport* pViewports)
+    {
+        D3D12_VIEWPORT Viewport;
+        commandList->RSSetViewports(1, &Viewport);
+    }
+    void DirectX12RHI::cmdSetScissorPFN(RHICommandBuffer* commandBuffer, uint32_t firstScissor, uint32_t scissorCount, const RHIRect2D* pScissors)
+    {
+        D3D12_RECT Rect;
+        commandList->RSSetScissorRects(1, &Rect);
+    }
+
+    void DirectX12RHI::cmdBindIndexBufferPFN(RHICommandBuffer* commandBuffer, RHIBuffer* buffer, RHIDeviceSize offset, RHIIndexType indexType)
+    {
+        D3D12_INDEX_BUFFER_VIEW ibv;
+        //ibv.BufferLocation = indexBufferGpu->GetGPUVirtualAddress();
+        //ibv.Format = DXGI_FORMAT_R16_UINT;
+        //ibv.SizeInBytes = ibByteSize;
+        
+        commandList->IASetIndexBuffer(&ibv);
+
+    }
+
+    void DirectX12RHI::cmdBindVertexBuffersPFN(RHICommandBuffer* commandBuffer,
+        uint32_t firstBinding,
+        uint32_t bindingCount,
+        RHIBuffer* const* pBuffers,
+        const RHIDeviceSize* pOffsets)
+    {
+        D3D12_VERTEX_BUFFER_VIEW vbv;
+        //vbv.BufferLocation = vertexBufferGpu->GetGPUVirtualAddress();//顶点缓冲区资源虚拟地址
+        //vbv.SizeInBytes = sizeof(Vertex) * 8;	//顶点缓冲区大小（所有顶点数据大小）
+        //vbv.StrideInBytes = sizeof(Vertex);	//每个顶点元素所占用的字节数
+        //设置顶点缓冲区
+        commandList->IASetVertexBuffers(0, 1, &vbv);
+
     }
 
     void DirectX12RHI::createDescriptorHeap()
