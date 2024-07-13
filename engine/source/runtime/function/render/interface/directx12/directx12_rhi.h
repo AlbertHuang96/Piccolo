@@ -4,6 +4,14 @@
 //#include "runtime/function/render/interface/vulkan/vulkan_rhi_resource.h"
 #include "runtime/function/render/interface/directx12/directx12_rhi_resource.h"
 
+#include <d3d12.h>
+#include <dxgi1_4.h>
+#include <wrl.h>
+
+#include "d3dx12.h"
+
+#define D3D12_GPU_VIRTUAL_ADDRESS_NULL      ((D3D12_GPU_VIRTUAL_ADDRESS)0)
+#define D3D12_GPU_VIRTUAL_ADDRESS_UNKNOWN   ((D3D12_GPU_VIRTUAL_ADDRESS)-1)
 
 #include <functional>
 #include <map>
@@ -26,13 +34,16 @@ namespace Piccolo
         bool allocateDescriptorSets(const RHIDescriptorSetAllocateInfo* pAllocateInfo, RHIDescriptorSet* &pDescriptorSets) override;
         void createSwapchain() override;
         void recreateSwapchain() override;
+
+        // the two overlap ----------------
         void createSwapchainImageViews() override;
         void createFramebufferImageAndView() override;
+        //---------------------------------
         RHISampler* getOrCreateDefaultSampler(RHIDefaultSamplerType type) override;
         RHISampler* getOrCreateMipmapSampler(uint32_t width, uint32_t height) override;
         RHIShader* createShaderModule(const std::vector<unsigned char>& shader_code) override;
         //
-        // buffer = ComPtr<ID3D12Resource>
+        // buffer  = ComPtr<ID3D12Resource> / buffer view = vbv, ibv, cbv
         void createBuffer(RHIDeviceSize size, RHIBufferUsageFlags usage, RHIMemoryPropertyFlags properties, RHIBuffer* &buffer, RHIDeviceMemory* &buffer_memory) override;
         void createBufferAndInitialize(RHIBufferUsageFlags usage, RHIMemoryPropertyFlags properties, RHIBuffer*& buffer, RHIDeviceMemory*& buffer_memory, RHIDeviceSize size, void* data = nullptr, int datasize = 0) override;
         bool createBufferVMA(VmaAllocator allocator,
@@ -50,10 +61,15 @@ namespace Piccolo
             VmaAllocation* pAllocation,
             VmaAllocationInfo* pAllocationInfo) override;
         void copyBuffer(RHIBuffer* srcBuffer, RHIBuffer* dstBuffer, RHIDeviceSize srcOffset, RHIDeviceSize dstOffset, RHIDeviceSize size) override;
+
+        //Image / image view = ComPtr<ID3D12Resource>
         void createImage(uint32_t image_width, uint32_t image_height, RHIFormat format, RHIImageTiling image_tiling, RHIImageUsageFlags image_usage_flags, RHIMemoryPropertyFlags memory_property_flags,
             RHIImage* &image, RHIDeviceMemory* &memory, RHIImageCreateFlags image_create_flags, uint32_t array_layers, uint32_t miplevels) override;
+
+        // handle
         void createImageView(RHIImage* image, RHIFormat format, RHIImageAspectFlags image_aspect_flags, RHIImageViewType view_type, uint32_t layout_count, uint32_t miplevels,
             RHIImageView* &image_view) override;
+
         void createGlobalImage(RHIImage* &image, RHIImageView* &image_view, VmaAllocation& image_allocation, uint32_t texture_image_width, uint32_t texture_image_height, void* texture_image_pixels, RHIFormat texture_image_format, uint32_t miplevels = 0) override;
         void createCubeMap(RHIImage* &image, RHIImageView* &image_view, VmaAllocation& image_allocation, uint32_t texture_image_width, uint32_t texture_image_height, std::array<void*, 6> texture_image_pixels, RHIFormat texture_image_format, uint32_t miplevels) override;
         bool createCommandPool(const RHICommandPoolCreateInfo* pCreateInfo, RHICommandPool* &pCommandPool) override;
@@ -168,43 +184,47 @@ namespace Piccolo
         //semaphores
         RHISemaphore* &getTextureCopySemaphore(uint32_t index) override;
     public:
-        static uint8_t const k_max_frames_in_flight {3};
 
-        ComPtr<ID3D12CommandQueue> mGraphicsCmdQueue;
-        ComPtr<ID3D12CommandQueue> mComputeCmdQueue;
+        static uint8_t const kMaxFramesInFlight {3};
+
+        uint8_t                mCurrentFrameIndex{ 0 };
+
+        QueueFamilyIndices m_queue_indices;
+
+        UINT mWidth = 800;
+        UINT mHeight = 600;
+
+        GLFWwindow* mWindow{ nullptr };
+        HWND mHWnd = nullptr;
         
+        // RHI interface members---------------------------------------------------
         RHIQueue* mGraphicsQueue{ nullptr };
         RHIQueue* mComputeQueue{ nullptr };
 
         RHIFormat m_swapchain_image_format{ RHI_FORMAT_UNDEFINED };
-        std::vector<RHIImageView*> m_swapchain_imageviews;
+        std::vector<RHIImageView*> mSwapchainImageviews;
         RHIExtent2D m_swapchain_extent;
+
         RHIViewport mViewport;
         RHIRect2D mScissor;
 
         RHIFormat m_depth_image_format{ RHI_FORMAT_UNDEFINED };
         //RHIImageView* m_depth_image_view = new VulkanImageView();
 
-        RHIFence* m_rhi_is_frame_in_flight_fences[k_max_frames_in_flight];
+        RHIFence* m_rhi_is_frame_in_flight_fences[kMaxFramesInFlight];
 
-        RHIDescriptorPool* m_descriptor_pool;
+        RHIDescriptorPool* mDescriptorPool;
         //= new VulkanDescriptorPool();
 
-        RHICommandPool* m_rhi_command_pool; 
+        RHICommandPool* mRhiCommandPool;
+        RHICommandBuffer* mCommandBuffers[kMaxFramesInFlight];
+        RHICommandBuffer* mCurrentCommandBuffer;  //= new VulkanCommandBuffer();
 
-        RHICommandBuffer* m_command_buffers[k_max_frames_in_flight];
-        RHICommandBuffer* m_current_command_buffer;  //= new VulkanCommandBuffer();
 
-        QueueFamilyIndices m_queue_indices;
-
-        GLFWwindow*        m_window {nullptr};
-        HWND mHWnd         = nullptr;
-
-        //VkInstance         m_instance {nullptr};
-        //VkSurfaceKHR       m_surface {nullptr};
-        //VkPhysicalDevice   m_physical_device {nullptr};
         
-
+        // DX12 members-------------------------------------------------------------
+        ComPtr<ID3D12CommandQueue> mGraphicsCmdQueue;
+        ComPtr<ID3D12CommandQueue> mComputeCmdQueue;
         //VkQueue            m_present_queue {nullptr};
         ComPtr<ID3D12CommandQueue> commandQueue;
 
@@ -214,30 +234,25 @@ namespace Piccolo
         ComPtr<ID3D12Device>   device;
 
         UINT                   rtvDescriptorSize;
-        ComPtr<ID3D12Resource> renderTargets[k_max_frames_in_flight];
+        ComPtr<ID3D12Resource> frameBuffers[kMaxFramesInFlight];
+        // framebuffer or render targets
 
-        UINT mWidth  = 800;
-        UINT mHeight = 600;
+        UINT                   dsvDescriptorSize;
+        ComPtr<ID3D12Resource> depthStencilBuffer;
 
         //VkSwapchainKHR           m_swapchain {nullptr};
-        ComPtr<IDXGISwapChain3>    m_swapchain {nullptr};
-
-        //std::vector<VkImage>        m_swapchain_images;
-        // std::vector<VkFramebuffer> m_swapchain_framebuffers;
-
-        //RHIImage*        m_depth_image = new VulkanImage();
-        //VkDeviceMemory m_depth_image_memory {nullptr};
-        //
+        ComPtr<IDXGISwapChain3>    mSwapchain {nullptr};
         
-        
-        //
         //// global descriptor pool
         //VkDescriptorPool m_vk_descriptor_pool;
         ComPtr<ID3D12DescriptorHeap> rtvHeap;
+        // rtv heap
+        ComPtr<ID3D12DescriptorHeap> dsvHeap;
+        // dsv heap
+        // cbv_srv_uav heap
         // 
         //
         //// command pool and buffers
-        uint8_t                m_current_frame_index {0};
 
         //VkCommandPool        m_command_pools[k_max_frames_in_flight];
         ComPtr<ID3D12CommandAllocator> commandAllocator;
@@ -252,10 +267,10 @@ namespace Piccolo
         //RHISemaphore*        m_image_available_for_texturescopy_semaphores[k_max_frames_in_flight];
         // 
         //VkFence              m_is_frame_in_flight_fences[k_max_frames_in_flight];
-        ComPtr<ID3D12Fence>    m_is_frame_in_flight_fences[k_max_frames_in_flight];
+        ComPtr<ID3D12Fence>    m_is_frame_in_flight_fences[kMaxFramesInFlight];
         //
 
-        uint32_t m_current_swapchain_image_index;
+        //uint32_t m_current_swapchain_image_index;
 
     private:
         //const std::vector<char const*> m_validation_layers {"VK_LAYER_KHRONOS_validation"};

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "runtime/function/render/interface/rhi.h"
+#include <d3d12.h>
 
 #include <optional>
 
@@ -42,6 +43,13 @@ namespace Piccolo
         }
 
         uint32_t GetVersionID() const { return m_VersionID; }
+
+        virtual void Destroy()
+        {
+            m_resource = nullptr;
+            m_GpuVirtualAddress = ((D3D12_GPU_VIRTUAL_ADDRESS)0);
+            ++m_VersionID;
+        }
     private:
         Microsoft::WRL::ComPtr<ID3D12Resource> m_resource;
         D3D12_RESOURCE_STATES m_UsageState;
@@ -73,6 +81,10 @@ namespace Piccolo
         void setResource(ID3D12GraphicsCommandList* res)
         {
             m_resource = res;
+        }
+        ID3D12GraphicsCommandList* getResource()
+        {
+            return m_resource.Get();
         }
         const ID3D12GraphicsCommandList* getResource() const
         {
@@ -202,35 +214,73 @@ namespace Piccolo
         ComPtr<ID3D12Fence> m_resource;
     };
 
-    class VulkanFramebuffer : public RHIFramebuffer
+    class DX12Framebuffer : public DX12Image
     {
-    public:
-        void setResource(VkFramebuffer res)
-        {
-            m_resource = res;
-        }
-        VkFramebuffer getResource() const
-        {
-            return m_resource;
-        }
-    private:
-        VkFramebuffer m_resource;
+    
+        
     };
 
-    class VulkanImage : public RHIImage
+    class DX12Image : public RHIImage
     {
     public:
-        void setResource(VkImage res)
+        void setResource(ID3D12Resource* res)
         {
             m_resource = res;
         }
-        VkImage &getResource()
+        ID3D12Resource* operator->()
         {
-            return m_resource;
+            return m_resource.Get();
+        }
+        const ID3D12Resource* operator->() const
+        {
+            return m_resource.Get();
+        }
+
+        ID3D12Resource* GetResource()
+        {
+            return m_resource.Get();
+        }
+        const ID3D12Resource* GetResource() const
+        {
+            return m_resource.Get();
+        }
+
+        ID3D12Resource** GetAddressOf()
+        {
+            return m_resource.GetAddressOf();
+        }
+
+        D3D12_GPU_VIRTUAL_ADDRESS GetGpuVirtualAddress() const
+        {
+            return m_GpuVirtualAddress;
+        }
+
+        uint32_t GetVersionID() const { return m_VersionID; }
+
+        void Init()
+        {
+
+            m_UsageState = D3D12_RESOURCE_STATE_COMMON;
+            m_GpuVirtualAddress = ((D3D12_GPU_VIRTUAL_ADDRESS)0);
+
+        }
+
+        virtual void Destroy()
+        {
+            m_resource = nullptr;
+            m_GpuVirtualAddress = ((D3D12_GPU_VIRTUAL_ADDRESS)0);
+            ++m_VersionID;
         }
     private:
-        VkImage m_resource;
+        Microsoft::WRL::ComPtr<ID3D12Resource> m_resource;
+        D3D12_RESOURCE_STATES m_UsageState;
+        D3D12_RESOURCE_STATES m_TransitioningState;
+        D3D12_GPU_VIRTUAL_ADDRESS m_GpuVirtualAddress;
+
+        // Used to identify when a resource changes so descriptors can be copied etc.
+        uint32_t m_VersionID = 0;
     };
+
     class VulkanImageView : public RHIImageView
     {
     public:

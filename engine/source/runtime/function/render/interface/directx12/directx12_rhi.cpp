@@ -65,11 +65,6 @@
 //#error Unknown Compiler
 //#endif
 
-#include <d3d12.h>
-#include <dxgi1_4.h>
-#include <wrl.h>
-
-#include "d3dx12.h"
 
 #pragma comment(lib, "d3d12.lib")
 #pragma comment(lib, "dxgi.lib")
@@ -110,13 +105,13 @@ namespace Piccolo
 
     void DirectX12RHI::initialize(RHIInitInfo init_info)
     {
-        m_window = init_info.window_system->getWindow();
-        mHWnd = glfwGetWin32Window(m_window);
+        mWindow = init_info.window_system->getWindow();
+        mHWnd = glfwGetWin32Window(mWindow);
 
         std::array<int, 2> window_size = init_info.window_system->getWindowSize();
 
-        m_viewport = {0.0f, 0.0f, (float)window_size[0], (float)window_size[1], 0.0f, 1.0f};
-        m_scissor  = {{0, 0}, {(uint32_t)window_size[0], (uint32_t)window_size[1]}};
+        mViewport = {0.0f, 0.0f, (float)window_size[0], (float)window_size[1], 0.0f, 1.0f};
+        mScissor = {{0, 0}, {(uint32_t)window_size[0], (uint32_t)window_size[1]}};
 
         #if defined(_DEBUG)
         {
@@ -163,6 +158,11 @@ namespace Piccolo
     void DirectX12RHI::createCommandPool()
     {
         ThrowIfFailed(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&commandAllocator)));
+    }
+
+    void DirectX12RHI::resetCommandPool()
+    {
+        ThrowIfFailed(commandAllocator->Reset());
     }
 
     bool DirectX12RHI::allocateCommandBuffers(const RHICommandBufferAllocateInfo* pAllocateInfo, RHICommandBuffer*& pCommandBuffers)
@@ -242,7 +242,7 @@ namespace Piccolo
     void DirectX12RHI::createSwapchain()
     {
         DXGI_SWAP_CHAIN_DESC1 swapChainDesc = {};
-        swapChainDesc.BufferCount           = k_max_frames_in_flight;
+        swapChainDesc.BufferCount           = kMaxFramesInFlight;
         swapChainDesc.Width                 = mWidth;
         swapChainDesc.Height                = mHeight;
         swapChainDesc.Format                = DXGI_FORMAT_R8G8B8A8_UNORM;
@@ -254,68 +254,245 @@ namespace Piccolo
         ThrowIfFailed(mDxgiFactory->CreateSwapChainForHwnd(
             commandQueue.Get(), mHWnd, &swapChainDesc, nullptr, nullptr, &swapChain1));
 
-        ThrowIfFailed(swapChain1.As(&m_swapchain));
-        m_current_frame_index = m_swapchain->GetCurrentBackBufferIndex();
+        ThrowIfFailed(swapChain1.As(&mSwapchain));
+        mCurrentFrameIndex = mSwapchain->GetCurrentBackBufferIndex();
+    }
+
+    void DirectX12RHI::recreateSwapchain()
+    {
+        for (int i = 0; i < kMaxFramesInFlight; ++i)
+            frameBuffers[i].Reset();
+        depthStencilBuffer.Reset();
+
+        // 根据窗口大小重新分配缓冲区大小
+        ThrowIfFailed(mSwapchain->ResizeBuffers(
+            kMaxFramesInFlight, 
+            mWidth, mHeight, 
+            DXGI_FORMAT_R8G8B8A8_UNORM,
+            DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH));
+    }
+
+    bool DirectX12RHI::createDescriptorPool(const RHIDescriptorPoolCreateInfo* pCreateInfo, RHIDescriptorPool*& pDescriptorPool)
+    {
+
+    }
+
+    bool DirectX12RHI::allocateDescriptorSets(const RHIDescriptorSetAllocateInfo* pAllocateInfo, RHIDescriptorSet*& pDescriptorSets)
+    {
+
+    }
+
+    bool DirectX12RHI::beginCommandBuffer(RHICommandBuffer* commandBuffer, const RHICommandBufferBeginInfo* pBeginInfo)
+    {
+        ThrowIfFailed(commandAllocator->Reset());
+
+        // 命令列表在提交之后就可以重置了，不需要等到命令执行完。
+        // 重用命令列表的内存块。
+        ThrowIfFailed(((DX12GraphicsCommandList*)commandBuffer)->getResource()->Reset(commandAllocator.Get(), nullptr));
+
+        // 把后缓冲区的资源状态切换成Render Target。
+            // ResourceBarrier函数创建了一个通知驱动同步资源访问性的命令，简单地来说就是切换资源的状态。
+        commandList->ResourceBarrier(1,
+            // D3D12_RESOURCE_BARRIER是资源栅栏（暂时这么翻译），用来表示对资源的操作。
+            // CD3DX12_RESOURCE_BARRIER类是D3D12_RESOURCE_BARRIER结构的辅助类，提供更便利的
+            // 使用接口。Transition的作用正如其函数名一样，创建资源状态转换的操作，其返回值
+            // 是CD3DX12_RESOURCE_BARRIER 。
+            &CD3DX12_RESOURCE_BARRIER::Transition(frameBuffers[mCurrentFrameIndex].Get(),
+                D3D12_RESOURCE_STATE_PRESENT,
+                D3D12_RESOURCE_STATE_RENDER_TARGET));
+    }
+
+    bool DirectX12RHI::endCommandBuffer(RHICommandBuffer* commandBuffer)
+    {
+        ThrowIfFailed(((DX12GraphicsCommandList*)commandBuffer)->getResource()->Close());
+    }
+
+    RHICommandBuffer* DirectX12RHI::beginSingleTimeCommands()
+    {
+        ComPtr<ID3D12GraphicsCommandList> oneTimeCommandList;
+        ThrowIfFailed(device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, commandAllocator.Get(), nullptr, IID_PPV_ARGS(&oneTimeCommandList)));
+
+        ThrowIfFailed(commandAllocator->Reset());
+
+        ThrowIfFailed(oneTimeCommandList->Reset(commandAllocator.Get(), nullptr));
+
+        // 把后缓冲区的资源状态切换成Render Target。
+            // ResourceBarrier函数创建了一个通知驱动同步资源访问性的命令，简单地来说就是切换资源的状态。
+        oneTimeCommandList->ResourceBarrier(1,
+            // D3D12_RESOURCE_BARRIER是资源栅栏（暂时这么翻译），用来表示对资源的操作。
+            // CD3DX12_RESOURCE_BARRIER类是D3D12_RESOURCE_BARRIER结构的辅助类，提供更便利的
+            // 使用接口。Transition的作用正如其函数名一样，创建资源状态转换的操作，其返回值
+            // 是CD3DX12_RESOURCE_BARRIER 。
+            &CD3DX12_RESOURCE_BARRIER::Transition(frameBuffers[mCurrentFrameIndex].Get(),
+                D3D12_RESOURCE_STATE_PRESENT,
+                D3D12_RESOURCE_STATE_RENDER_TARGET));
+
+        RHICommandBuffer* commandBuffer = new DX12GraphicsCommandList();
+        ((DX12GraphicsCommandList*)commandBuffer)->setResource(oneTimeCommandList.Get());
+        return commandBuffer;
+    }
+
+    // need to sync queue wait vkQueueWaitIdle
+    void DirectX12RHI::endSingleTimeCommands(RHICommandBuffer* commandBuffer)
+    {
+        ThrowIfFailed(((DX12GraphicsCommandList*)commandBuffer)->getResource()->Close());
+        
+        
+        ID3D12CommandList* cmdLists[] = { ((DX12GraphicsCommandList*)commandBuffer)->getResource() };
+        commandQueue->ExecuteCommandLists(_countof(cmdLists), cmdLists);
+
+        /*VkSubmitInfo submitInfo{};
+        submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        submitInfo.commandBufferCount = 1;
+        submitInfo.pCommandBuffers = &vk_command_buffer;
+
+        vkQueueSubmit(((VulkanQueue*)m_graphics_queue)->getResource(), 1, &submitInfo, VK_NULL_HANDLE);
+        vkQueueWaitIdle(((VulkanQueue*)m_graphics_queue)->getResource());
+
+        vkFreeCommandBuffers(m_device, ((VulkanCommandPool*)m_rhi_command_pool)->getResource(), 1, &vk_command_buffer);*/
+        //delete(command_buffer);
+
+        delete(commandBuffer);
+    }
+
+    bool DirectX12RHI::createCommandPool(const RHICommandPoolCreateInfo* pCreateInfo, RHICommandPool*& pCommandPool)
+    {
+        //((DX12CommandAllocator*)pCommandPool)->getResource()
+        ID3D12CommandAllocator* addr = ((DX12CommandAllocator*)pCommandPool)->getResource();
+        ThrowIfFailed(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&addr)));
     }
 
     // cmd buffer = dx12 cmd list
     RHICommandBuffer* DirectX12RHI::getCurrentCommandBuffer() const 
     { 
-        return m_current_command_buffer; 
+        return mCurrentCommandBuffer; 
     }
 
     RHICommandBuffer* const* DirectX12RHI::getCommandBufferList() const
     {
-        return m_command_buffers;
+        return mCommandBuffers;
     }
 
     RHICommandPool* DirectX12RHI::getCommandPoor() const 
     { 
-        return m_rhi_command_pool; 
+        return mRhiCommandPool; 
     }
+
     RHIDescriptorPool* DirectX12RHI::getDescriptorPoor() const 
     { 
-        return m_descriptor_pool; 
+        return mDescriptorPool; 
     }
+
+
     RHIFence* const*   DirectX12RHI::getFenceList() const 
     { 
         return m_rhi_is_frame_in_flight_fences; 
     }
+
     QueueFamilyIndices DirectX12RHI::getQueueFamilyIndices() const 
     { 
         return m_queue_indices; 
     }
+
     RHIQueue* DirectX12RHI::getGraphicsQueue() const 
     { 
         return mGraphicsQueue;
     }
+
     RHIQueue* DirectX12RHI::getComputeQueue() const 
     { 
         return mComputeQueue;
     }
 
+    bool DirectX12RHI::queueSubmit(RHIQueue* queue, uint32_t submitCount, const RHISubmitInfo* pSubmits, RHIFence* fence)
+    {
+        ThrowIfFailed(commandList->Close());
+        ID3D12CommandList* cmdLists[] = { commandList.Get() };
+        ((DX3D12CommandQueue*)queue)->getResource()->ExecuteCommandLists(_countof(cmdLists), cmdLists);
+        //queue->getResource->ExecuteCommandLists(_countof(cmdLists), cmdLists);
+    }
+
+    bool DirectX12RHI::createFence(const RHIFenceCreateInfo* pCreateInfo, RHIFence*& pFence)
+    {
+
+        //ThrowIfFailed(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence)));
+    }
+
     void DirectX12RHI::createFramebufferImageAndView()
     {
-        // depth image view
+        // = DirectX12RHI::createSwapchainImageViews()
+        // rtvs and dsv
+    }
+
+    bool DirectX12RHI::createFramebuffer(const RHIFramebufferCreateInfo* pCreateInfo, RHIFramebuffer*& pFramebuffer)
+    {
+        //ComPtr<ID3D12Resource>
     }
 
     void DirectX12RHI::createSwapchainImageViews()
     {
         CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandle(rtvHeap->GetCPUDescriptorHandleForHeapStart());
 
-        for (UINT n = 0; n < k_max_frames_in_flight; n++)
+        for (UINT n = 0; n < kMaxFramesInFlight; n++)
         {
-            ThrowIfFailed(m_swapchain->GetBuffer(n, IID_PPV_ARGS(&renderTargets[n])));
-            device->CreateRenderTargetView(renderTargets[n].Get(), nullptr, rtvHandle);
+            ThrowIfFailed(mSwapchain->GetBuffer(n, IID_PPV_ARGS(&frameBuffers[n])));
+            device->CreateRenderTargetView(frameBuffers[n].Get(), nullptr, rtvHandle);
             rtvHandle.Offset(1, rtvDescriptorSize);
         }
+
+        D3D12_RESOURCE_DESC depthStencilDesc;
+        depthStencilDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D; // 缓冲区维数（1维纹理还是2维纹理？）
+        depthStencilDesc.Alignment = 0; // 对齐
+        depthStencilDesc.Width = mWidth; 
+        depthStencilDesc.Height = mHeight; 
+        depthStencilDesc.DepthOrArraySize = 1; // 纹理的深度，以纹素为单位；或者是纹理数组尺寸
+        depthStencilDesc.MipLevels = 1; 
+        depthStencilDesc.Format = DXGI_FORMAT_R24G8_TYPELESS; // 纹素格式
+        depthStencilDesc.SampleDesc.Count = 1; 
+        depthStencilDesc.SampleDesc.Quality = 0;
+        depthStencilDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN; // 纹理布局，暂时不用管。
+        depthStencilDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL; // 其他资源标志。允许深度/模板视图作为资源创建，
+        // 并且允许资源转换成D3D12_RESOURCE_STATE_DEPTH_WRITE或D3D12_RESOURCE_STATE_DEPTH_READ状态
+
+        D3D12_CLEAR_VALUE optClear;
+        optClear.Format = DXGI_FORMAT_D24_UNORM_S8_UINT; // 缓存数据格式
+        optClear.DepthStencil.Depth = 1.0f; 
+        optClear.DepthStencil.Stencil = 0; 
+        // 创建，提交一个资源到特定的堆，这个资源属性是我们指定的。
+        ThrowIfFailed(device->CreateCommittedResource(
+            &CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT), // 特定的堆的属性。这里表示堆是被GPU访问的。
+            D3D12_HEAP_FLAG_NONE, // 堆选项，指明堆是否包含纹理，资源是否被多个适配器共享。NONE表示不需要额外的功能。
+            &depthStencilDesc, // 资源描述符。生成这种资源。
+            D3D12_RESOURCE_STATE_COMMON, // 资源的初始状态。要如何使用这个资源？
+            // 这个枚举的官方解释是要跨越图形引擎类型访问资源的话必须转换到这个状态。但是并没有给出详细的说明。
+            // 还指出了，纹理必须是COMMON状态，为了让CPU进行访问。这里是否跟第一个参数冲突？
+            &optClear, // 清除值
+            IID_PPV_ARGS(depthStencilBuffer.GetAddressOf())));
+
+        //创建DSV(必须填充DSV属性结构体，和创建RTV不同，RTV是通过句柄)
+    //D3D12_DEPTH_STENCIL_VIEW_DESC dsvDesc;
+    //dsvDesc.Flags = D3D12_DSV_FLAG_NONE;
+    //dsvDesc.Format = DXGI_FORMAT_D24_UNORM_S8_UINT;
+    //dsvDesc.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
+    //dsvDesc.Texture2D.MipSlice = 0;
+        device->CreateDepthStencilView(depthStencilBuffer.Get(),
+            nullptr,	//D3D12_DEPTH_STENCIL_VIEW_DESC类型指针，可填&dsvDesc（见上注释代码），
+            //由于在创建深度模板资源时已经定义深度模板数据属性，所以这里可以指定为空指针
+            dsvHeap->GetCPUDescriptorHandleForHeapStart());	//DSV句柄
     }
 
     void DirectX12RHI::cmdSetViewportPFN(RHICommandBuffer* commandBuffer, uint32_t firstViewport, uint32_t viewportCount, const RHIViewport* pViewports)
     {
         D3D12_VIEWPORT Viewport;
+        Viewport.Width = pViewports->width;
+        Viewport.Height = pViewports->height;
+        Viewport.MinDepth = pViewports->minDepth;
+        Viewport.MaxDepth = pViewports->maxDepth;
+        Viewport.TopLeftX = pViewports->x;
+        Viewport.TopLeftY = pViewports->y;
         commandList->RSSetViewports(1, &Viewport);
     }
+
     void DirectX12RHI::cmdSetScissorPFN(RHICommandBuffer* commandBuffer, uint32_t firstScissor, uint32_t scissorCount, const RHIRect2D* pScissors)
     {
         D3D12_RECT Rect;
@@ -350,13 +527,56 @@ namespace Piccolo
 
     void DirectX12RHI::createDescriptorHeap()
     {
+        // rtv heap
         D3D12_DESCRIPTOR_HEAP_DESC rtvHeapDesc = {};
-        rtvHeapDesc.NumDescriptors             = k_max_frames_in_flight;
+        rtvHeapDesc.NumDescriptors             = kMaxFramesInFlight;
         rtvHeapDesc.Type                       = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
         rtvHeapDesc.Flags                      = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
         ThrowIfFailed(device->CreateDescriptorHeap(&rtvHeapDesc, IID_PPV_ARGS(&rtvHeap)));
 
         rtvDescriptorSize = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
+
+        // dsv heap
+        D3D12_DESCRIPTOR_HEAP_DESC dsvHeapDesc;
+        dsvHeapDesc.NumDescriptors = 1;
+        dsvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
+        dsvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE; 
+        dsvHeapDesc.NodeMask = 0;
+        
+        ThrowIfFailed(device->CreateDescriptorHeap(
+            &dsvHeapDesc,
+            IID_PPV_ARGS(dsvHeap.GetAddressOf())));
+
+        dsvDescriptorSize = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_DSV);
+    }
+
+    void DirectX12RHI::createBuffer(RHIDeviceSize size, RHIBufferUsageFlags usage, RHIMemoryPropertyFlags properties, RHIBuffer*& buffer, RHIDeviceMemory*& buffer_memory)
+    {
+
+    }
+
+    void DirectX12RHI::createImage(uint32_t image_width, uint32_t image_height, RHIFormat format, RHIImageTiling image_tiling, RHIImageUsageFlags image_usage_flags, RHIMemoryPropertyFlags memory_property_flags,
+        RHIImage*& image, RHIDeviceMemory*& memory, RHIImageCreateFlags image_create_flags, uint32_t array_layers, uint32_t miplevels)
+    {
+        D3D12_RESOURCE_DESC Desc = {};
+        Desc.Alignment = 0;
+        Desc.DepthOrArraySize = (UINT16)array_layers;
+        Desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        //Desc.Flags = (D3D12_RESOURCE_FLAGS)Flags;
+        //Desc.Format = GetBaseFormat(Format);
+        Desc.Height = (UINT)image_height;
+        Desc.Width = (UINT64)image_width;
+        Desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+        Desc.MipLevels = (UINT16)miplevels;
+        Desc.SampleDesc.Count = 1;
+        Desc.SampleDesc.Quality = 0;
+
+        
+        D3D12_CLEAR_VALUE ClearValue;
+        CD3DX12_HEAP_PROPERTIES HeapProps(D3D12_HEAP_TYPE_DEFAULT);
+        ThrowIfFailed(device->CreateCommittedResource(&HeapProps, D3D12_HEAP_FLAG_NONE,
+            &Desc, D3D12_RESOURCE_STATE_COMMON, &ClearValue, IID_PPV_ARGS(((DX12Image*)image)->GetAddressOf())));
+        
     }
 
     bool DirectX12RHI::createSampler(const RHISamplerCreateInfo* pCreateInfo, RHISampler*& pSampler)
@@ -386,15 +606,15 @@ namespace Piccolo
 
     uint8_t DirectX12RHI::getMaxFramesInFlight() const 
     { 
-        return k_max_frames_in_flight; 
+        return kMaxFramesInFlight;
     }
     uint8_t DirectX12RHI::getCurrentFrameIndex() const 
     { 
-        return m_current_frame_index; 
+        return mCurrentFrameIndex; 
     }
     void    DirectX12RHI::setCurrentFrameIndex(uint8_t index) 
     { 
-        m_current_frame_index = index; 
+        mCurrentFrameIndex = index;
     }
 
     bool DirectX12RHI::createBufferVMA(VmaAllocator                   allocator,
