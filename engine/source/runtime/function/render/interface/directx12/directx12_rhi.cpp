@@ -552,7 +552,47 @@ namespace Piccolo
 
     void DirectX12RHI::createBuffer(RHIDeviceSize size, RHIBufferUsageFlags usage, RHIMemoryPropertyFlags properties, RHIBuffer*& buffer, RHIDeviceMemory*& buffer_memory)
     {
+        //UINT64 RHIDeviceSize
+        ComPtr<ID3D12Resource> uploadBuffer = nullptr;
+            //创建上传堆，作用是：写入CPU内存数据，并传输给默认堆
+        ThrowIfFailed(device->CreateCommittedResource(&CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD), //创建上传堆类型的堆
+                D3D12_HEAP_FLAG_NONE,
+                &CD3DX12_RESOURCE_DESC::Buffer(size),//变体的构造函数，传入byteSize，其他均为默认值，简化书写
+                D3D12_RESOURCE_STATE_GENERIC_READ,	//上传堆里的资源需要复制给默认堆，所以是可读状态
+                nullptr,	//不是深度模板资源，不用指定优化值
+                IID_PPV_ARGS(&uploadBuffer)));
 
+        //创建默认堆，作为上传堆的数据传输对象
+        //ComPtr<ID3D12Resource> defaultBuffer;
+        ComPtr<ID3D12Resource> defaultBuffer = ((DX12Buffer*)buffer)->GetResource();
+        ThrowIfFailed(device->CreateCommittedResource(&CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT),//创建默认堆类型的堆
+            D3D12_HEAP_FLAG_NONE,
+            &CD3DX12_RESOURCE_DESC::Buffer(size),
+            D3D12_RESOURCE_STATE_COMMON,//默认堆为最终存储数据的地方，所以暂时初始化为普通状态
+            nullptr,
+            IID_PPV_ARGS(&defaultBuffer)));
+
+        //将资源从COMMON状态转换到COPY_DEST状态（默认堆此时作为接收数据的目标）
+        commandList->ResourceBarrier(1,
+            &CD3DX12_RESOURCE_BARRIER::Transition(defaultBuffer.Get(),
+                D3D12_RESOURCE_STATE_COMMON,
+                D3D12_RESOURCE_STATE_COPY_DEST));
+
+        //将数据从CPU内存拷贝到GPU缓存
+        D3D12_SUBRESOURCE_DATA subResourceData;
+        //subResourceData.pData = initData; // it is vertices/indexes data buffer
+        subResourceData.RowPitch = size;
+        subResourceData.SlicePitch = subResourceData.RowPitch;
+        //核心函数UpdateSubresources，将数据从CPU内存拷贝至上传堆，再从上传堆拷贝至默认堆。1是最大的子资源的下标（模板中定义，意为有2个子资源）
+        UpdateSubresources<1>(commandList.Get(), defaultBuffer.Get(), uploadBuffer.Get(), 0, 0, 1, &subResourceData);
+
+        //再次将资源从COPY_DEST状态转换到GENERIC_READ状态(现在只提供给着色器访问)
+        commandList->ResourceBarrier(1,
+            &CD3DX12_RESOURCE_BARRIER::Transition(defaultBuffer.Get(),
+                D3D12_RESOURCE_STATE_COPY_DEST,
+                D3D12_RESOURCE_STATE_GENERIC_READ));
+
+        //return defaultBuffer;
     }
 
     void DirectX12RHI::createImage(uint32_t image_width, uint32_t image_height, RHIFormat format, RHIImageTiling image_tiling, RHIImageUsageFlags image_usage_flags, RHIMemoryPropertyFlags memory_property_flags,
